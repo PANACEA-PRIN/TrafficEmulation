@@ -1,2 +1,37 @@
 # TrafficEmulation
 Generazione di traffico malevolo in ambiente emulato
+
+## Contenuto
+Questo repository contiene una versione aggiornata della cartella "lab" di [KathaRange](https://github.com/g4br-i/KathaRange).
+Rispetto alla versione originale, differisce nei seguenti elementi:
+* **Nuova configurazione di Snort:** ora Snort, oltre a generare gli alert, memorizza in ./lab/shared/logs/ un file PCAP contenente tutto il traffico passante per il router r5.
+
+* **Nuovo script per generare Dataset relativi al traffico:** lo script ./lab/shared/scripts/decode_logpcap.py può essere usato per processare i file PCAP generati da Snort. Lo script utilizza la libreria [pyshark](http://kiminewt.github.io/pyshark). In output viene restituito un dataset con caratteristiche ispirate a quelle del dataset [UNSW-NB15](https://research.unsw.edu.au/projects/unsw-nb15-dataset), memorizzato in un file CSV. Il file PCAP di partenza può essere specificato all'interno dello script.
+
+* **Nuovo script per il merge dei Dataset:** lo script ./lab/shared/scripts/merge_datasets.py, dati due dataset in input generati con lo script citato in precedenza, restituisce un unico dataset ottenuto concatenando i due file di input, compattando eventualmente i timestamp se risultano più distanti di una certa soglia, configurabile nello script.
+
+* **Generazione di Traffico normale:** all'avvio di KathaRange, con questa nuova configurazione, viene eseguito in background su diverse macchine lo script ./lab/shared/scripts/allowed_traffic.sh, che genera traffico comune all'interno della rete, ad esempio richieste HTTP, invio di file con *scp*, *ping*... Inoltre, alcune macchine eseguono lo script ./lab/shared/scripts/periodic_requests.sh, che genera richieste periodiche verso un indirizzo IP configurabile.
+  
+* **Nuovi Avversari e Abilità in Caldera:** sono stati aggiunti nuovi Avversari Red Team in Caldera, che eseguono delle Abilità che corrispondono agli attacchi descritti nel seguito. 
+
+
+## Gli Attacchi implementati
+* **Worm e DDoS**: consiste in un worm che si propaga nella rete sfruttando vulnerabilità comuni (la presenza di un account "admin" con password "admin"), infetta diverse macchine nel Lab e, dopo un certo tempo (configurabile, di base pari a 3 minuti) dall'inizio della propagazione, lancia in modo coordinato un attacco DDoS contro il server Apache2_2, inviando ripetutamente richieste HTTP al server. Se eseguito con permessi di root, viene lanciato contemporaneamente un SYN-flood contro il server. Per eseguirlo, è sufficiente lanciare un'operazione in Caldera con l'Avversario **Custom Worm** da un singolo Agente Red Team.
+
+* **Flooding contro Wazuh**: consiste in un attacco di SYN-flood contro il Wazuh-Manager, che ha l'obiettivo di saturarlo per impedire che Wazuh mostri nell'interfaccia grafica gli alert generati da Snort relativi a un attacco contemporaneo: durante l'attacco, Wazuh mostrerà solo messaggi relativi a pacchetti SYN insoliti, non riuscendo a mostrare gli alert relativi a qualsiasi altro evento contemporaneo. Per testarlo, è possibile lanciare un'operazione Caldera con l'Avversario **Wazuh flooder** su 4 diversi Agenti Red Team, di cui due nella stessa sottorete di Wazuh. Per testare l'efficacia dell'attacco, si può lanciare nella sezione Initial-Access di Caldera, da un quinto Agente Red Team, l'esecuzione dell'Abilità **Steal Passwords**, che si collega al server Apache2_1 con *ssh* e copia con *scp* il file */etc/passwd*. Gli alert relativi a questo attacco non saranno mostrati da Wazuh.
+
+* **Forza Bruta contro server FTP e Web-Shell:** per eseguire questo attacco, è necessario configurare un server FTP vulnerabile su Apache2_1, nel relativo script startup. Per farlo, è sufficiente abilitare le righe che seguono *#Install the FTP server and other useful stuff*, inizialmente commentate. Facendo ciò, verrà abilitato un server FTP e saranno aggiunte vulnerabilità utili a realizzare questo attacco. Per eseguirlo, è necessario lanciare un'Operazione in Caldera usando l'Avversario **FTP Attacker** a partire da un Agente Red Team che abbia il comando *ftp* disponibile, come l'Agente Kali. L'Avversario esegue tre Abilità: la prima esegue un attacco di Forza Bruta per accedere al server FTP tentando combinazioni di username e password molto comuni; la seconda utilizza le credenziali trovate per loggarsi e caricare uno script PHP che fungerà come Web-Shell; la terza interagisce con la Web-Shell eseguendo comandi in remoto tramite *curl*.
+
+* **Cross Site Scripting:** per realizzare questo attacco, è necessario abilitare in ./lab/kali.startup le righe che seguono *#Enable the following instructions to install nodejs and to have a background process that emulates a web browser*. In questo modo, l'host Kali eseguirà richieste periodiche verso il server Apache2_1 attraverso uno script NodeJS, che simuleranno l'utilizzo di un Browser. L'obiettivo dell'attacco è rubare il cookie di sessione dell'host Kali. Per farlo, è possibile lanciare un'Operazione in Caldera usando l'Avversario **XSS Cookie Stealer**, che esegue due diverse Abilità: la prima esegue un attacco di Forza Bruta contro il server via *ssh*, usando uno script di *nmap* per determinare delle credenziali valide; la seconda utilizza le credenziali per collegarsi al server e caricare in coda al file *index.html* uno script che invia il cookie di sessione all'attaccante. Infine si mette in ascolto con *netcat* fin quando non riceve un cookie, che viene stampato in output. Per eseguire l'attacco è necessario dunque usare un Agente Red Team che abbia *nmap* installato: può essere usato l'host PC1, dopo aver abilitato la riga che installa *nmap* nel relativo file startup.
+
+* **Command Injection contro Email-server vulnerabile:** quest'ultimo attacco richiede la configurazione di un Email-server su Tomcat2_1: questa può avvenire abilitando le righe che seguono *#The following commands set up the vulnerable email-server* nel relativo script startup. L'Email-server ottenuto è basato sullo script ./lab/shared/scripts/mail-server.py e sarà vulnerabile a Command-Injection per la mancata sanificazione dell'input. Per eseguire l'attacco è sufficiente lanciare un'Operazione in Caldera usando l'Avversario **Command Injector**, che esegue due Abilità: la prima simula l'interazione di un attaccante con il server, quindi effettua una serie di richieste che simulano i passaggi che verrebbero eseguiti per scoprire il modo in cui viene processato l'input dal server, attraverso i messaggi di errore restituiti. Infine, viene iniettato un comando che apre una Bind Shell con *netcat* in ascolto sulla porta 4444. La seconda Abilità tenta invece di interagire con la Bind Shell utilizzando *netcat* e inviando comandi configurabili (di base è testato *ls -l*). Può essere usato un Agente Red Team come l'host Kali, che ha di base una versione adatta di *netcat*.
+
+**Gli script utilizzati dalle Abilità durante gli attacchi sono tutti memorizzati in ./lab/shared/caldera/data/payload/**
+
+
+## Esempio di Dataset
+All'interno di ./lab/shared/logs/ è presente un file .zip che contiene un Dataset ottenuto unendo con lo script citato in precedenza diversi dataset, relativi ai singoli attacchi e contenenti anche traffico normale.
+
+
+## Utilizzo
+Per testare questo repository, è sufficiente scaricare [KathaRange](https://github.com/g4br-i/KathaRange) e sostituire la cartella "lab" con quella presente in questo repository.
